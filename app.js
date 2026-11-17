@@ -204,43 +204,88 @@ function similarity(a, b) {
   const overlap = aWords.filter(w => bWords.has(w)).length / Math.max(aWords.length, bWords.size);
   return 0.6 * levenshtein + 0.4 * overlap;
 }
+// Compare full song names, shortened beginnings, and partially typed words.
+function looseSimilarity(input, candidate) {
+  const wanted = clean(input), full = clean(candidate);
+  if (!wanted || !full) return 0;
+  if (wanted === full) return 1;
+  const words = wanted.split(' ');
+  if (full.startsWith(wanted + ' ')) return words.length >= 2 ? .96 : .87;
+  // Handles partial last words: "No Sur" -> "No Surprises".
+  if (full.startsWith(wanted) && wanted.length >= 5) return .90;
+  const fullWords = full.split(' ');
+  if (words.length <= fullWords.length &&
+      words.every((word, i) => word.length >= 3 && fullWords[i].startsWith(word))) return .88;
+  return similarity(wanted, full);
+}
+
 function score(row, track) {
-  const titleScore = similarity(row.song || row.original, track.name);
-  const artistScore = row.artist ? Math.max(...(track.artists || []).map(a => similarity(row.artist, a.name)), 0) : .8;
-  let result = (row.artist ? .6 * titleScore + .4 * artistScore : titleScore) * 100;
-  if (row.artist && artistScore < .48) result = Math.min(result, 58);
-  if (titleScore < .50) result = Math.min(result, 55);
+  const artists = track.artists || [];
+  let result;
+  if (row.artist) {
+    const titleScore = looseSimilarity(row.song, track.name);
+    const artistScore = Math.max(0, ...artists.map(a => looseSimilarity(row.artist, a.name)));
+    result = (.64 * titleScore + .36 * artistScore) * 100;
+    // An artist mismatch must not win just because the song title is common.
+    if (artistScore < .56) result = Math.min(result, 55);
+    if (titleScore < .49) result = Math.min(result, 55);
+  } else {
+    // A line without a separator can still work: "Oasis Wonderwall".
+    const titleScore = looseSimilarity(row.song || row.original, track.name);
+    const combinedScore = Math.max(0, ...artists.map(a =>
+      looseSimilarity(row.song || row.original, a.name + ' ' + track.name)));
+    result = Math.max(titleScore, combinedScore) * 100;
+  }
   if (/live|karaoke|tribute|cover/i.test(track.name) && !/live|karaoke|tribute|cover/i.test(row.song)) result -= 14;
   if (/remaster/i.test(track.name) && !/remaster/i.test(row.song)) result -= 4;
   return Math.min(100, Math.max(0, Math.round(result)));
 }
+
 function normalizeTracks(raw, row) {
   return (raw || []).filter(track => track && track.uri && track.type === 'track')
     .map(track => ({ track, confidence: score(row, track) }))
     .sort((a, b) => b.confidence - a.confidence);
 }
+
 async function getCandidates(row, custom = '') {
-  if (row.id) {
+  if (row.id && !custom) {
     const track = await spotify('/tracks/' + encodeURIComponent(row.id));
     return [{ track, confidence: 100 }];
   }
-  const exact = custom || (row.artist ? `track:"${row.song.replace(/"/g, '')}" artist:"${row.artist.replace(/"/g, '')}"` : row.song);
   const search = async (query) => {
     const params = new URLSearchParams({ q: query, type: 'track', limit: '10' });
     const result = await spotify('/search?' + params.toString());
     return normalizeTracks(result.tracks?.items || [], row);
   };
-  let candidates = await search(exact);
-  if (!custom && (!candidates.length || candidates[0].confidence < 76) && row.artist) {
-    const fallback = await search(`${row.song} ${row.artist}`);
-    const seen = new Set();
-    candidates = [...candidates, ...fallback].filter(entry => {
-      if (seen.has(entry.track.id)) return false;
-      seen.add(entry.track.id);
-      return true;
-    }).sort((a, b) => b.confidence - a.confidence).slice(0, 10);
+  // Start precise and broaden the query if Spotify doesn't return a confident match.
+  // This lets "Placebo — Every You" find "Every You Every Me".
+  const queries = custom ? [custom] : row.artist ? [
+    `track:"${row.song.replace(/"/g, '')}" artist:"${row.artist.replace(/"/g, '')}"`,
+    `${row.artist} ${row.song}`,
+    `${row.song} ${row.artist}`
+  ] : [row.song];
+  const unique = new Map();
+  for (const query of [...new Set(queries.filter(Boolean))]) {
+    for (const candidate of await search(query)) {
+      const id = candidate.track.id || candidate.track.uri;
+      if (!unique.has(id) || candidate.confidence > unique.get(id).confidence) unique.set(id, candidate);
+    }
+    const best = [...unique.values()].sort((a,b) => b.confidence - a.confidence);
+    if (best.length && best[0].confidence >= 91) break;
   }
-  return candidates;
+  return [...unique.values()].sort((a,b) => b.confidence - a.confidence).slice(0, 10);
+}
+
+function isPartialMatch(row, track) {
+  const requested = clean(row.song || row.original);
+  if (row.artist) {
+    const actual = clean(track.name);
+    return actual !== requested && actual.startsWith(requested) && requested.length >= 4;
+  }
+  return (track.artists || []).some(a => {
+    const actual = clean(a.name + ' ' + track.name);
+    return actual !== requested && actual.startsWith(requested) && requested.length >= 4;
+  });
 }
 function setSearching(value) {
   state.searching = value;
@@ -295,7 +340,11 @@ function rowStatus(row) {
   if (!row.done) return 'review';
   if (!row.chosen) return 'missing';
   const selected = row.candidates.find(e => e.track.uri === row.chosen.uri);
-  return selected?.confidence >= 82 ? 'ok' : 'review';
+  if (isPartialMatch(row, row.chosen)) return 'review';
+  const ambiguous = row.candidates.some(other => other.track.uri !== row.chosen.uri &&
+    clean(other.track.name) !== clean(row.chosen.name) &&
+    other.confidence >= (selected?.confidence || 0) - 4);
+  return selected?.confidence >= 82 && !ambiguous ? 'ok' : 'review';
 }
 function cover(track, size) {
   const img = track?.album?.images?.[track.album.images.length - 1]?.url;

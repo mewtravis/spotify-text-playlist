@@ -7,7 +7,7 @@ const $ = (id) => document.getElementById(id);
 const AUTH_URL = 'https://accounts.spotify.com/authorize';
 const TOKEN_URL = 'https://accounts.spotify.com/api/token';
 const API_ROOT = 'https://api.spotify.com/v1';
-const SCOPES = 'playlist-modify-private playlist-modify-public';
+const SCOPES = 'playlist-modify-private playlist-modify-public ugc-image-upload';
 const REDIRECT_URI = location.origin + location.pathname;
 const STORAGE = {
   client: 't2s_client_id', token: 't2s_tokens', verifier: 't2s_pkce_verifier',
@@ -15,7 +15,8 @@ const STORAGE = {
 };
 const state = {
   tokens: null, profile: null, rows: [], currentFilter: 'all', searching: false,
-  creating: false, cancel: false, playlist: null, addedCount: 0
+  creating: false, cancel: false, playlist: null, addedCount: 0,
+  coverBase64: null, coverPreviewUrl: null, coverUploaded: false, coverUploadError: ''
 };
 const example = [
   'Limp Bizkit — Nookie', 'Korn — Freak on a Leash', 'Slipknot — Wait and Bleed',
@@ -307,6 +308,8 @@ async function findSongs() {
   state.cancel = false;
   state.rows = parsed.map((entry, i) => ({ ...entry, index: i, candidates: [], chosen: null, expanded: false, manual: false, done: false, error: '' }));
   state.playlist = null; state.addedCount = 0;
+  state.coverUploaded = false; state.coverUploadError = '';
+  updateCoverButton();
   $('successSection').hidden = true;
   $('resultsSection').hidden = false;
   $('results').textContent = '';
@@ -458,6 +461,141 @@ async function loadProfile() {
   catch(e) { setNotice(e.message, 'error'); }
   updateAccount();
 }
+
+// Spotify accepts base64 JPEG, at most 256 KB including the encoded payload.
+// Crop to a square and compress in the browser; never upload the original file elsewhere.
+async function makeCover(file) {
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+    throw new Error('Выбери изображение JPG, PNG или WebP.');
+  }
+  if (file.size > 20 * 1024 * 1024) throw new Error('Файл больше 20 МБ. Выбери изображение поменьше.');
+  let picture, tempUrl;
+  try {
+    if (typeof createImageBitmap === 'function') {
+      picture = await createImageBitmap(file);
+    } else {
+      tempUrl = URL.createObjectURL(file);
+      picture = new Image();
+      picture.src = tempUrl;
+      await picture.decode();
+    }
+    const width = picture.width || picture.naturalWidth;
+    const height = picture.height || picture.naturalHeight;
+    if (!width || !height) throw new Error('Не получилось прочитать изображение.');
+    const side = Math.min(width, height);
+    const canvas = document.createElement('canvas');
+    const sizes = [640, 512, 400, 320, 256];
+    const qualities = [0.86, 0.76, 0.65, 0.53, 0.40];
+    for (const size of sizes) {
+      canvas.width = canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Браузер не поддерживает обработку изображений.');
+      // Fill transparent pixels in PNGs with a solid background.
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, size, size);
+      ctx.drawImage(picture, (width - side) / 2, (height - side) / 2, side, side, 0, 0, size, size);
+      for (const quality of qualities) {
+        const blob = await new Promise((resolve, reject) => canvas.toBlob(
+          result => result ? resolve(result) : reject(new Error('Не получилось сжать обложку.')),
+          'image/jpeg', quality
+        ));
+        // Under 180 KiB as raw JPEG leaves room for base64's ~33% expansion.
+        if (blob.size <= 180 * 1024) {
+          const dataURL = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result));
+            reader.onerror = () => reject(new Error('Не получилось прочитать готовую обложку.'));
+            reader.readAsDataURL(blob);
+          });
+          const base64 = dataURL.split(',')[1];
+          if (base64 && base64.length <= 256 * 1024) return { blob, base64, size };
+        }
+      }
+    }
+    throw new Error('Картинку не удалось сжать до лимита Spotify. Попробуй другую.');
+  } finally {
+    if (picture && typeof picture.close === 'function') picture.close();
+    if (tempUrl) URL.revokeObjectURL(tempUrl);
+  }
+}
+function updateCoverButton() {
+  const button = $('retryCoverButton');
+  if (!button) return;
+  button.hidden = !state.playlist || !state.coverBase64 || state.coverUploaded ||
+    state.addedCount !== (state.playlistUris || []).length;
+  button.textContent = state.coverUploadError ? 'Повторить загрузку обложки' : 'Загрузить обложку';
+}
+function removeCover() {
+  state.coverBase64 = null;
+  state.coverUploaded = false;
+  state.coverUploadError = '';
+  if (state.coverPreviewUrl) URL.revokeObjectURL(state.coverPreviewUrl);
+  state.coverPreviewUrl = null;
+  $('coverPreview').textContent = '♫';
+  $('coverStatus').textContent = 'Обложка необязательна.';
+  $('removeCoverButton').hidden = true;
+  updateCoverButton();
+}
+async function chooseCover(file) {
+  if (!file) return;
+  $('coverInput').disabled = true;
+  $('coverStatus').textContent = 'Подготавливаем квадратную обложку…';
+  try {
+    const result = await makeCover(file);
+    if (state.coverPreviewUrl) URL.revokeObjectURL(state.coverPreviewUrl);
+    state.coverPreviewUrl = URL.createObjectURL(result.blob);
+    state.coverBase64 = result.base64;
+    state.coverUploaded = false;
+    state.coverUploadError = '';
+    const img = document.createElement('img');
+    img.src = state.coverPreviewUrl;
+    img.alt = 'Предпросмотр обложки';
+    $('coverPreview').replaceChildren(img);
+    $('coverStatus').textContent = `${file.name} · ${result.size} × ${result.size} · готово к загрузке`;
+    $('removeCoverButton').hidden = false;
+    updateCoverButton();
+  } catch (e) {
+    $('coverStatus').textContent = 'Ошибка: ' + e.message;
+    setNotice(e.message, 'warning');
+  } finally {
+    $('coverInput').disabled = false;
+    $('coverInput').value = '';
+  }
+}
+async function uploadCover() {
+  if (!state.playlist || !state.coverBase64) return;
+  await spotify(`/playlists/${encodeURIComponent(state.playlist.id)}/images`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'image/jpeg' },
+    body: state.coverBase64
+  });
+  state.coverUploaded = true;
+  state.coverUploadError = '';
+  $('coverStatus').textContent = 'Обложка загружена в Spotify ✓';
+  updateCoverButton();
+}
+async function retryCover() {
+  if (!state.playlist || !state.coverBase64 || state.creating) return;
+  state.creating = true;
+  $('retryCoverButton').disabled = true;
+  $('successText').textContent = 'Загружаем обложку в Spotify…';
+  try {
+    await uploadCover();
+    $('successTitle').textContent = 'Готово!';
+    $('successText').textContent = `Плейлист «${state.playlist.name}» с обложкой готов.`;
+    setNotice('Обложка успешно загружена!');
+  } catch (e) {
+    state.coverUploadError = e.message;
+    $('successTitle').textContent = 'Плейлист готов, обложка не загружена';
+    $('successText').textContent = 'Spotify не принял обложку: ' + e.message;
+    setNotice('Песни сохранены. Можно повторить загрузку обложки.', 'warning');
+  } finally {
+    state.creating = false;
+    $('retryCoverButton').disabled = false;
+    updateCoverButton();
+  }
+}
+
 async function createPlaylist() {
   if (state.creating || state.searching || state.playlist) return;
   const chosen=selectedRows();
@@ -474,11 +612,14 @@ async function createPlaylist() {
     state.playlist=playlist;
     state.playlistUris=chosen.map(row=>row.chosen.uri);
     state.addedCount=0;
+    state.coverUploaded=false;
+    state.coverUploadError='';
     $('successSection').hidden=false;
     $('playlistLink').href=playlist.external_urls?.spotify || `https://open.spotify.com/playlist/${playlist.id}`;
     $('successTitle').textContent='Плейлист создан';
     $('successText').textContent='Добавляем треки…';
     $('retryAddButton').hidden=true;
+    updateCoverButton();
     await addRemainingTracks();
   } catch(e) { setNotice((state.playlist ? 'Плейлист уже создан, но возникла ошибка: ' : 'Не получилось создать плейлист: ')+e.message,'error'); }
   finally { state.creating=false; $('findButton').disabled=false; $('createButton').textContent='Создать плейлист →'; renderResults(); }
@@ -496,10 +637,23 @@ async function addRemainingTracks() {
       state.addedCount=i+batch.length;
       $('successText').textContent=`Добавлено ${state.addedCount} из ${uris.length} песен…`;
     }
-    $('successTitle').textContent='Готово!';
-    $('successText').textContent=`В плейлист «${state.playlist.name}» добавлено ${uris.length} ${plural(uris.length,'песня','песни','песен')}.`;
     $('retryAddButton').hidden=true;
-    setNotice('Плейлист готов и открыт для прослушивания в Spotify.');
+    let coverError = null;
+    if (state.coverBase64 && !state.coverUploaded) {
+      $('successText').textContent='Все песни добавлены. Загружаем обложку…';
+      try { await uploadCover(); }
+      catch (error) { coverError = error; state.coverUploadError = error.message; }
+    }
+    if (coverError) {
+      $('successTitle').textContent='Плейлист готов, обложка не загружена';
+      $('successText').textContent=`Добавлено ${uris.length} песен. Обложка: ${coverError.message}`;
+      setNotice('Плейлист создан. Не нужно создавать его снова — попробуй повторить загрузку обложки.', 'warning');
+    } else {
+      $('successTitle').textContent='Готово!';
+      $('successText').textContent=`В плейлист «${state.playlist.name}» добавлено ${uris.length} ${plural(uris.length,'песня','песни','песен')}${state.coverUploaded ? ' и загружена обложка' : ''}.`;
+      setNotice('Плейлист готов и открыт для прослушивания в Spotify.');
+    }
+    updateCoverButton();
     $('successSection').scrollIntoView({behavior:'smooth',block:'start'});
   } catch(e) {
     $('successTitle').textContent='Плейлист создан, но не все треки добавлены';
@@ -551,6 +705,9 @@ async function init() {
   $('cancelButton').addEventListener('click',()=>{state.cancel=true;$('cancelButton').disabled=true;setTimeout(()=>$('cancelButton').disabled=false,1000);});
   $('createButton').addEventListener('click',createPlaylist);
   $('retryAddButton').addEventListener('click',retryAdd);
+  $('retryCoverButton').addEventListener('click',retryCover);
+  $('coverInput').addEventListener('change',event => chooseCover(event.target.files?.[0]));
+  $('removeCoverButton').addEventListener('click',removeCover);
   document.querySelectorAll('.chip').forEach(chip=>chip.addEventListener('click',()=>{
     document.querySelectorAll('.chip').forEach(c=>c.classList.remove('active'));
     chip.classList.add('active'); state.currentFilter=chip.dataset.filter; renderResults();

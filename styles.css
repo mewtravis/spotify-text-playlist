@@ -14,3 +14,7 @@
 .cover-upload-controls .text-button{display:block;margin-top:9px}
 .cover-upload-controls .hint{margin:8px 0 0;line-height:1.5}
 @media(max-width:520px){.cover-preview{width:90px;height:90px}.cover-upload-row{gap:12px}.cover-picker{padding:8px 10px}}
+
+/* Respect the HTML hidden attribute even when button styles specify display. */
+[hidden]{display:none !important}
+.cover-upload-controls label.cover-picker{display:inline-flex;margin:0;align-items:center;justify-content:center;min-height:40px}

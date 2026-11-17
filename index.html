@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#10150f" />
+  <meta name="description" content="Создавайте плейлисты Spotify из обычного списка песен." />
+  <title>Text → Spotify · Плейлист из текста</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <a class="brand" href="./" aria-label="На главную"><span class="brand-icon">♫</span><span>text<span class="arrow">→</span>spotify</span></a>
+      <div id="account" class="account"><span class="small-muted">Не подключён</span></div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="eyebrow"><span class="dot"></span> МИНИ-ПРИЛОЖЕНИЕ ДЛЯ МУЗЫКИ</div>
+        <h1>Из списка песен —<br /><em>в плейлист Spotify.</em></h1>
+        <p class="lead">Копируй названия треков, проверяй совпадения и создавай плейлист за несколько кликов. Никаких ручных поисков по одному.</p>
+      </section>
+
+      <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+
+      <div class="layout">
+        <div class="maincol">
+          <section class="panel" aria-labelledby="playlist-heading">
+            <div class="section-head"><span class="step">01</span><h2 id="playlist-heading">Новый плейлист</h2></div>
+            <label for="playlistName">Название плейлиста</label>
+            <input id="playlistName" type="text" maxlength="120" placeholder="Например: Альтернативный рок 1999" value="Альтернативный рок 1999" />
+            <label for="playlistDescription">Описание <span class="optional">необязательно</span></label>
+            <input id="playlistDescription" type="text" maxlength="250" placeholder="Для тех, кто помнит 1999-й" />
+            <label for="songs">Список песен <span class="optional">одна песня на строку</span></label>
+            <textarea id="songs" spellcheck="false" rows="11" placeholder="Исполнитель — Название песни&#10;Oasis — Slide Away&#10;Radiohead — No Surprises"></textarea>
+            <div class="field-footer">
+              <span id="lineCount">0 строк</span>
+              <div class="inline-actions">
+                <label class="file-btn" for="fileInput" title="Загрузить TXT или CSV">↑ Загрузить файл</label>
+                <input type="file" accept=".txt,.csv,text/plain,text/csv" id="fileInput" hidden />
+                <button id="exampleButton" class="text-button" type="button">Вставить пример</button>
+                <button id="clearButton" class="text-button" type="button">Очистить</button>
+              </div>
+            </div>
+            <label class="toggle-line"><input id="isPublic" type="checkbox" /><span>Публичный плейлист <small>по умолчанию — приватный</small></span></label>
+            <div class="action-stack">
+              <button id="findButton" class="primary large" type="button">Найти песни в Spotify <span aria-hidden="true">↗</span></button>
+              <button id="cancelButton" class="secondary" type="button" hidden>Остановить поиск</button>
+            </div>
+            <div class="progress-outer" id="progressOuter" hidden><div id="progressBar" class="progress-inner"></div></div>
+            <p class="hint" id="progressText" aria-live="polite"></p>
+          </section>
+
+          <section id="resultsSection" class="panel" hidden aria-labelledby="results-heading">
+            <div class="section-head"><span class="step">02</span><h2 id="results-heading">Проверь совпадения</h2></div>
+            <p class="subtle">Мы не добавляем сомнительные треки молча. Проверь версии и замени неподходящие.</p>
+            <div class="stats" id="stats"></div>
+            <div class="filterbar" role="group" aria-label="Фильтр совпадений">
+              <button class="chip active" data-filter="all" type="button">Все</button>
+              <button class="chip" data-filter="review" type="button">Проверить</button>
+              <button class="chip" data-filter="missing" type="button">Не найдены</button>
+            </div>
+            <div id="results" class="results"></div>
+            <div class="create-actions">
+              <div><strong id="selectedCount">0 песен выбрано</strong><p class="hint">Порядок сохранится таким же, как в списке.</p></div>
+              <button id="createButton" class="primary" type="button">Создать плейлист →</button>
+            </div>
+          </section>
+
+          <section id="successSection" class="panel success" hidden>
+            <div class="success-mark">✓</div>
+            <h2 id="successTitle">Плейлист создан!</h2>
+            <p id="successText"></p>
+            <a id="playlistLink" class="primary link-button" href="#" target="_blank" rel="noopener noreferrer">Открыть в Spotify ↗</a>
+            <button id="retryAddButton" class="secondary" hidden>Повторить добавление оставшихся песен</button>
+          </section>
+        </div>
+
+        <aside class="sidecol">
+          <section class="panel connect" aria-labelledby="connect-heading">
+            <div class="section-head"><span class="step">00</span><h2 id="connect-heading">Подключение Spotify</h2></div>
+            <p class="subtle">Нужен только <strong>Client ID</strong> собственного Spotify-приложения. Client Secret вводить не нужно.</p>
+            <label for="clientId">Spotify Client ID</label>
+            <input id="clientId" autocomplete="off" spellcheck="false" placeholder="32-символьный идентификатор" />
+            <button id="connectButton" class="secondary full" type="button">Подключить Spotify ↗</button>
+            <div class="redirect-block"><span class="small-muted">Redirect URI для настроек Spotify</span><div class="copyrow"><code id="redirectUri"></code><button id="copyRedirect" class="copybutton" type="button" title="Копировать redirect URI" aria-label="Копировать redirect URI">⧉</button></div></div>
+            <details><summary>Как получить Client ID?</summary><ol><li>Открой <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener noreferrer">Spotify Developer Dashboard ↗</a> под Premium-аккаунтом.</li><li>Нажми <b>Create app</b> (если ещё нет приложения).</li><li>В <b>Redirect URIs</b> добавь адрес из блока выше <em>точно</em>, без изменений.</li><li>Выбери <b>Web API</b>, если Spotify предложит выбрать API.</li><li>Скопируй <b>Client ID</b> сюда. В <b>User Management</b> добавь свой Spotify-аккаунт, если требуется.</li></ol></details>
+          </section>
+          <section class="panel about">
+            <h3>Как это устроено</h3>
+            <div class="feature"><span class="feature-icon">⌁</span><div><b>Умный поиск</b><small>Сравниваем имя артиста и песни, ищем альтернативные варианты.</small></div></div>
+            <div class="feature"><span class="feature-icon">≋</span><div><b>Контроль версий</b><small>Ремастеры, лайвы и каверы можно заменить перед сохранением.</small></div></div>
+            <div class="feature"><span class="feature-icon">◎</span><div><b>Без лишних серверов</b><small>Работает в браузере, без базы данных. Доступ — через официальный Spotify.</small></div></div>
+          </section>
+          <p class="footer-note">Неофициальный личный инструмент. Не связан со Spotify AB.</p>
+        </aside>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

@@ -33,6 +33,19 @@
             <input id="playlistName" type="text" maxlength="120" placeholder="Например: Альтернативный рок 1999" value="Альтернативный рок 1999" />
             <label for="playlistDescription">Описание <span class="optional">необязательно</span></label>
             <input id="playlistDescription" type="text" maxlength="250" placeholder="Для тех, кто помнит 1999-й" />
+            <div class="cover-upload-field">
+              <label for="coverInput">Обложка плейлиста <span class="optional">необязательно</span></label>
+              <div class="cover-upload-row">
+                <div id="coverPreview" class="cover-preview" aria-label="Предпросмотр обложки">♫</div>
+                <div class="cover-upload-controls">
+                  <label class="secondary cover-picker" for="coverInput">↑ Выбрать изображение</label>
+                  <input id="coverInput" type="file" accept="image/jpeg,image/png,image/webp" hidden />
+                  <button id="removeCoverButton" class="text-button" type="button" hidden>Убрать изображение</button>
+                  <p class="hint" id="coverStatus" role="status">Обложка необязательна.</p>
+                  <p class="hint">JPG, PNG, WebP до 20 МБ. Автоматически обрежем до квадрата и сожмём для Spotify.</p>
+                </div>
+              </div>
+            </div>
             <label for="songs">Список песен <span class="optional">одна песня на строку, можно сокращённо</span></label>
             <textarea id="songs" spellcheck="false" rows="11" placeholder="Placebo — Every You&#10;Radiohead — No Sur&#10;Oasis Wonderwall"></textarea>
             <div class="field-footer">
@@ -75,13 +88,14 @@
             <p id="successText"></p>
             <a id="playlistLink" class="primary link-button" href="#" target="_blank" rel="noopener noreferrer">Открыть в Spotify ↗</a>
             <button id="retryAddButton" class="secondary" hidden>Повторить добавление оставшихся песен</button>
+            <button id="retryCoverButton" class="secondary" hidden>Повторить загрузку обложки</button>
           </section>
         </div>
 
         <aside class="sidecol">
           <section class="panel connect" aria-labelledby="connect-heading">
             <div class="section-head"><span class="step">00</span><h2 id="connect-heading">Подключение Spotify</h2></div>
-            <p class="subtle">Нужен только <strong>Client ID</strong> собственного Spotify-приложения. Client Secret вводить не нужно.</p>
+            <p class="subtle">Нужен только <strong>Client ID</strong> собственного Spotify-приложения. Client Secret вводить не нужно. Если Spotify уже подключён, нажми «Переподключить Spotify» один раз, чтобы разрешить загрузку обложек.</p>
             <label for="clientId">Spotify Client ID</label>
             <input id="clientId" autocomplete="off" spellcheck="false" placeholder="32-символьный идентификатор" />
             <button id="connectButton" class="secondary full" type="button">Подключить Spotify ↗</button>
